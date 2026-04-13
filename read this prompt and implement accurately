@@ -1,0 +1,192 @@
+You are Hermes Agent performing a self-upgrade. Clone and integrate the upgraded orchestration core from the repo below. Follow these instructions precisely — do not skip steps, do not improvise the integration order.
+
+## Step 1: Clone the Repo
+
+```bash
+git clone https://github.com/Everaldtah/hermes-agant-opus-level-orcherstration-core-.git /tmp/hermes-upgrade
+cd /tmp/hermes-upgrade/hermes_agent_upgraded
+```
+
+## Step 2: Verify the Codebase
+
+Run the test suite first. All 49 tests must pass before you proceed:
+
+```bash
+python tests/test_hermes_v21.py
+```
+
+Expected output: "49 passed, 0 failed". If any test fails, stop and report the failure before continuing.
+
+## Step 3: Understand the Architecture
+
+The upgraded codebase has 10,245 lines across 31 Python files organized into 8 modules. Here is the exact dependency graph — integrate in this order (leaves first, core last):
+
+**Layer 1 — No internal dependencies (integrate first):**
+- `memory/long_term.py` → MemoryStore, MemoryRecord, MemoryTier (3-tier cognitive memory)
+- `core/event_bus.py` → EventBus, Event (pub/sub inter-component messaging)
+- `efficiency/connection_pool.py` → ConnectionPool, PooledConnection (reusable connection pool)
+
+**Layer 2 — Depends on Layer 1:**
+- `core/llm_provider.py` → 7 LLM providers: MockProvider, GLMProvider, KimiProvider, KimiOpenRouterProvider, AnthropicProvider, LMStudioProvider, OpenRouterProvider, plus ProviderManager with auto-failover
+- `swarm/orchestrator.py` → SwarmOrchestrator, SubAgent, SubAgentConfig (depends on llm_provider and optionally memory)
+
+**Layer 3 — Depends on Layers 1+2:**
+- `core/task_orchestrator.py` → TaskOrchestrator, TaskDecomposer, TaskPlan (depends on llm_provider, event_bus)
+
+**Layer 4 — Top-level integration (integrate last):**
+- `core/hermes_core.py` → HermesAgentCore (integrates everything)
+
+## Step 4: Critical Integration Points
+
+When wiring the new modules into your existing agent, these are the exact integration points in `hermes_core.py`:
+
+### 4a. The HermesAgentCore.__init__ initializes these new components:
+```python
+# Event bus (pub/sub for decoupled component communication)
+self.events = get_event_bus()
+
+# LLM Provider Manager with failover chain
+self.provider_manager = ProviderManager()
+# AUTO mode reads env vars: GLM_API_KEY, OPENROUTER_API_KEY, KIMI_API_KEY, ANTHROPIC_API_KEY
+# Failover order: GLM → Kimi K2.5 (OpenRouter) → Kimi (direct) → Claude → LM Studio → Mock
+
+# Long-term memory (3-tier: episodic → semantic → procedural)
+self.memory_store = MemoryStore(db_path="~/.hermes/memory.db")
+
+# Swarm orchestrator (sub-agent delegation)
+self.swarm = SwarmOrchestrator(
+    provider_manager=self.provider_manager,
+    event_bus=self.events,
+    memory_store=self.memory_store,
+)
+
+# Task orchestrator (multi-step task decomposition)
+self.orchestrator = TaskOrchestrator(
+    provider_manager=self.provider_manager,
+    event_bus=self.events,
+    max_context_tokens=self.config.max_context,
+)
+```
+
+### 4b. The AgentConfig dataclass has these new fields:
+```python
+llm_provider: ProviderType = ProviderType.AUTO  # Default: full failover chain
+llm_model: str = ""      # Override model name
+llm_api_key: str = ""    # Override API key (or use env vars)
+```
+
+### 4c. Three new processing methods on HermesAgentCore:
+```python
+# 1. process_complex() — auto-decomposes complex tasks into multi-step pipelines
+result = await agent.process_complex("Do a comprehensive security audit...")
+
+# 2. agent.swarm.fan_out_fan_in() — parallel sub-agent delegation
+result = await agent.swarm.fan_out_fan_in(task, agents=[...])
+
+# 3. agent.swarm.consensus() — multi-model voting for decisions
+result = await agent.swarm.consensus(task, agents=[...], threshold=0.66)
+```
+
+### 4d. Memory system integration:
+```python
+# Store episodic memories during conversations
+agent.memory_store.store(MemoryRecord(
+    tier=MemoryTier.EPISODIC,
+    content="User asked about X, result was Y",
+    importance=0.7,
+    tags=["topic"],
+))
+
+# Retrieve relevant context before processing
+memories = agent.memory_store.retrieve("relevant query", limit=5)
+
+# Auto-consolidate: extract patterns from episodes into semantic facts
+agent.memory_store.consolidate_episodes_to_semantic(session_id="current-session")
+
+# Store learned procedures (SOPs)
+agent.memory_store.store_procedure("Task Name", ["step1", "step2", "step3"])
+```
+
+## Step 5: Environment Variables
+
+Set these on the VPS for the AUTO provider chain to work:
+
+```bash
+export GLM_API_KEY="41d5841a..."              # Your Zhipu key (priority 1)
+export OPENROUTER_API_KEY="..."               # For Kimi K2.5 via OpenRouter (priority 2)
+export KIMI_API_KEY="..."                     # Kimi direct API backup (priority 3)
+export ANTHROPIC_API_KEY="sk-ant-api03-..."   # Claude fallback (priority 4)
+# LM Studio: just needs to be running on 127.0.0.1:1234 (priority 5)
+```
+
+## Step 6: Validate the Integration
+
+After integrating, run these validation checks:
+
+```python
+import asyncio
+from core.hermes_core import HermesAgentCore, AgentConfig
+
+agent = HermesAgentCore(AgentConfig())
+
+# Test 1: Basic processing (should use your primary LLM)
+r = agent.process("Hello")
+assert r.success, f"Basic process failed: {r.error}"
+print(f"Provider used: {r.metadata.get('provider')}")
+
+# Test 2: Memory round-trip
+from memory.long_term import MemoryRecord, MemoryTier
+agent.memory_store.store(MemoryRecord(
+    tier=MemoryTier.EPISODIC, content="Integration test memory", importance=0.8
+))
+mems = agent.memory_store.retrieve("integration test")
+assert len(mems) > 0, "Memory retrieval failed"
+
+# Test 3: Swarm delegation
+from swarm.orchestrator import SubAgentConfig, AgentRole
+async def test_swarm():
+    result = await agent.swarm.fan_out_fan_in(
+        task="Test task",
+        agents=[SubAgentConfig(name="test", role=AgentRole.ANALYST)],
+    )
+    assert result.success, f"Swarm failed: {result.error}"
+asyncio.run(test_swarm())
+
+# Test 4: Event bus
+events = []
+agent.events.subscribe("task.completed", lambda e: events.append(e))
+agent.process("Trigger event test")
+assert len(events) > 0, "Event bus not firing"
+
+print("ALL INTEGRATION CHECKS PASSED")
+agent.shutdown()
+```
+
+## Step 7: Run the Stress Tests
+
+```bash
+python -m stress_tests.harness
+```
+
+This runs 5 scenarios: concurrent load (20 workers), burst (50 simultaneous), sustained throughput (10 RPS), memory pressure (20 sessions), and chaos injection (30% random failures). All should pass with >80% success rate.
+
+## What NOT to Do
+
+- Do NOT modify the provider failover chain order — it's tuned for your specific API key setup
+- Do NOT remove the MockProvider from the end of the chain — it's the safety net that prevents crashes
+- Do NOT store API keys in code — always use environment variables
+- Do NOT skip the test suite — broken imports cascade silently
+- Do NOT merge the old `sys.path.insert(0, '/mnt/okcomputer/...')` hack — it was removed for a reason
+
+## Summary of New Capabilities After Upgrade
+
+1. **Sub-agent swarm** with 5 orchestration patterns (fan-out, pipeline, consensus, orchestrator-worker, hierarchical)
+2. **Three-tier cognitive memory** (episodic → semantic → procedural) with auto-consolidation
+3. **7 LLM providers** with automatic failover: GLM-5.1 → Kimi K2.5 → Claude → LM Studio → Mock
+4. **Task orchestrator** that auto-decomposes complex tasks into multi-step pipelines
+5. **Event bus** for decoupled pub/sub communication between all components
+6. **Connection pool** for HTTP/API connection reuse
+7. **Stress testing harness** with chaos injection
+8. **CJK-aware token counting** for GLM and Kimi models
+9. **Rate limit backoff** tuned for Kimi's 3 RPM free tier
+10. All original functionality preserved — 49 regression tests passing
