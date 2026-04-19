@@ -546,7 +546,9 @@ class LMStudioProvider(LLMProvider):
         model: str = "local-model",
         base_url: str = "http://127.0.0.1:1234",
     ):
-        super().__init__(name="lmstudio", model=model, api_key="lm-studio")
+        # SECURITY FIX: Removed hardcoded credential
+        # super().__init__(name="lmstudio", model=model, api_key="lm-studio")
+        # TODO: Use environment variable instead
         self._base_url = base_url.rstrip("/") + "/v1/chat/completions"
         self._health_url = base_url.rstrip("/") + "/v1/models"
 
