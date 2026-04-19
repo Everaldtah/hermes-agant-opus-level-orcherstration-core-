@@ -303,7 +303,7 @@ class MultiLevelCache:
         try:
             import sys
             return sys.getsizeof(value)
-        except:
+        except Exception as e:  # SECURITY: Specific exception handling
             return 100  # Default estimate
     
     def invalidate(self, key: str) -> bool:
